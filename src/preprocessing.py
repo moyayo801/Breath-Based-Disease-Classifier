@@ -1,65 +1,53 @@
 import pandas as pd
-import numpy as np
-
-def clean_libsvm_cell(cell):
-    """
-    Turns '123:0.527291' into 0.527291
-    Turns NaN or empty into 0.0
-    """
-    if pd.isna(cell) or cell == "":
-        return 0.0
-    
-    if isinstance(cell, str) and ":" in cell:
-        try:
-            return float(cell.split(":")[-1])
-        except ValueError:
-            return 0.0
-    return cell
-
-def fix_final_column(val):
-    val_str = str(val)
-    if ":" in val_str:
-        return val_str.split(":")[0] 
-    return val
-
 import os
 
+# 1. Setup paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
+raw_dir = os.path.join(script_dir, '..', 'data', 'raw')
+processed_dir = os.path.join(script_dir, '..', 'data', 'processed')
 
-data_path = os.path.join(script_dir, '..', 'data', 'raw', 'gas_data.csv')
+# 2. Define your target batches
+batches = ['batch2.dat', 'batch3.dat', 'batch6.dat', 'batch7.dat', 'batch10.dat']
+all_rows = []
 
-print(f"Looking for file at: {data_path}")
+def parse_libsvm(filepath):
+    data = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            if not line.strip(): continue
+            parts = line.split()
+            
+            # Extract ID and Concentration
+            meta = parts[0].split(';')
+            gas_id = int(meta[0])
+            ppmv = float(meta[1]) if len(meta) > 1 else 0.0
+            
+            # Extract 128 Features
+            features = [float(p.split(':')[-1]) for p in parts[1:]]
+            if len(features) == 128:
+                data.append([gas_id, ppmv] + features)
+    return data
 
-try:
-    df = pd.read_csv(data_path)
-    print("Success! File loaded.")
-except FileNotFoundError:
-    print("Error: The file is still not there. Check if you ran your download script first!")
+# 3. Process and Combine
+for b in batches:
+    file_path = os.path.join(raw_dir, b)
+    if os.path.exists(file_path):
+        print(f"Parsing {b}...")
+        all_rows.extend(parse_libsvm(file_path))
 
-feature_cols = [col for col in df.columns if col != 'class']
+# 4. Create DataFrame and Map Names
+cols = ['gas_id', 'ppmv'] + [f'Feat_{i}' for i in range(1, 129)]
+df_final = pd.DataFrame(all_rows, columns=cols)
 
-print("Cleaning columns... this might take a second.")
-for col in feature_cols:
-    df[col] = df[col].apply(clean_libsvm_cell)
+gas_map = {1:"Ethanol", 2:"Ethylene", 3:"Ammonia", 4:"Acetaldehyde", 5:"Acetone", 6:"Toluene"}
+df_final['gas_name'] = df_final['gas_id'].map(gas_map)
 
-df['class'] = df['class'].apply(fix_final_column)
+# 5. Save to CSV
+if not os.path.exists(processed_dir):
+    os.makedirs(processed_dir)
 
-gas_names = {
-    "1": "Ethanol",
-    "2": "Ethylene",
-    "3": "Ammonia",
-    "4": "Acetaldehyde",
-    "5": "Acetone",
-    "6": "Toluene"
-}
-df['gas_name'] = df['class'].map(gas_names)
+save_path = os.path.join(processed_dir, 'combined_gas_data.csv')
+df_final.to_csv(save_path, index=False)
 
-print("Clean-up complete!")
-print(df.head())
-
-if not os.path.exists('data/processed'):
-    os.makedirs('data/processed')
-
-df.to_csv('data/processed/gas_data_processed.csv', index=False)
-
-print(f"File saved successfully at: processed/gas_data_processed.csv")
+print(f"\nSaved {len(df_final)} measurements to {save_path}")
+print(df_final['gas_name'].value_counts())
